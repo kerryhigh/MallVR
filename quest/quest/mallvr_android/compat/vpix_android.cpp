@@ -10,6 +10,7 @@
 #include <jni.h>
 #include <stdlib.h>
 #include "SDL.h"
+#include "vpix_cardboard.h"
 
 #define ALOG(...) __android_log_print(ANDROID_LOG_INFO, "MallVR", __VA_ARGS__)
 
@@ -20,12 +21,19 @@ extern "C" void *gl4es_GetProcAddress(const char *name);
 HGLRC wglCreateContext(HDC) {
     g_dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (!eglInitialize(g_dpy, NULL, NULL)) { ALOG("eglInitialize failed"); return NULL; }
-    const EGLint ca[] = { EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 24,
-                          EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT */, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_NONE };
+    EGLDisplay share_dpy = EGL_NO_DISPLAY;
+    EGLint share_config_id = 0;
+    EGLContext share_ctx = VPIX_CardboardWaitForShareContext(&share_dpy, &share_config_id);
+    if (share_ctx == EGL_NO_CONTEXT || share_dpy != g_dpy) {
+        ALOG("Cardboard shared EGL context unavailable");
+        return NULL;
+    }
+    const EGLint ca[] = { EGL_CONFIG_ID, share_config_id, EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT */,
+                          EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT, EGL_NONE };
     EGLint n = 0;
-    if (!eglChooseConfig(g_dpy, ca, &g_cfg, 1, &n) || n < 1) { ALOG("no EGL config"); return NULL; }
+    if (!eglChooseConfig(g_dpy, ca, &g_cfg, 1, &n) || n < 1) { ALOG("no shared EGL config"); return NULL; }
     const EGLint xa[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
-    g_ctx = eglCreateContext(g_dpy, g_cfg, EGL_NO_CONTEXT, xa);
+    g_ctx = eglCreateContext(g_dpy, g_cfg, share_ctx, xa);
     const EGLint pa[] = { EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE };
     g_pb = eglCreatePbufferSurface(g_dpy, g_cfg, pa);
     if (g_ctx == EGL_NO_CONTEXT || g_pb == EGL_NO_SURFACE) { ALOG("EGL context/pbuffer failed 0x%X", eglGetError()); return NULL; }

@@ -1,1 +1,7 @@
 site/
+
+# Android phone/Cardboard build output and machine-local paths.
+/quest/quest/phone/.gradle/
+/quest/quest/phone/**/build/
+/quest/quest/phone/**/.cxx/
+/quest/quest/phone/local.properties

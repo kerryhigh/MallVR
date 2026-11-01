@@ -13,6 +13,7 @@ MallVR is a modified [DOSBox-X](https://github.com/joncampbell123/dosbox-x). The
 - 14 games: Dactyl Nightmare, Dactyl Nightmare 2, Pac-Man VR, Zone Hunter, Ghost Train, Virtuality Boxing, Missile Command VR, Olin Shotgun, Shoot For Loot, Sea Diving (Pearl), Buggy Ball, plus the SU3000 games Total Recoil, Zero Hour and Zeneca Migraine
 - SteamVR headsets (developed on an HTC Vive), or a desktop window; a 32-bit build for older Windows
 - Meta Quest, standalone (no PC needed): see [`quest/`](quest/)
+- Android phones with Google Cardboard: single-player Pac-Man VR; see [`quest/quest/phone/`](quest/quest/phone/README.md)
 - Linked pods: the original pod network card is emulated, so linked games run between copies on one PC, on a home network, or online (QUICK MATCH)
 - Controller rumble, crouch, arm reach and aim trims, self-update
 
@@ -25,6 +26,17 @@ MallVR is a modified [DOSBox-X](https://github.com/joncampbell123/dosbox-x). The
 ## Meta Quest
 
 [`quest/`](quest/) holds the source of **MallVR Quest**, the first DOSBox-X running on Meta Quest: the same engine built for Android with OpenXR, a headset launcher, play notes and REPORT A PROBLEM. Build steps are in `quest/README_SOURCE.txt`. The APK and install guide are on the [download page](https://gainesphere.com/pages/mallvr-download#quest).
+
+## Android phone (Google Cardboard)
+
+[`quest/quest/phone/`](quest/quest/phone/README.md) contains the native Cardboard build for single-player Pac-Man VR. The repository does not contain the SU2000 game files. Keep your own MallVR `games` folder outside the checkout and pass its path to the build script:
+
+```powershell
+cd .\quest\quest\phone
+.\build_cardboard.ps1 -GameFiles 'C:\path\to\MallVR\games'
+```
+
+The script checks the Pac-Man files it needs, stages Pac-Man and its shared DOS/VPC support files under the ignored `quest/quest/phone/app/build/generated/assets/gamefiles/` directory, then packages them into the local APK. Do not copy game files into tracked source folders or commit generated build output. See the phone README for the expected folder layout and full build requirements.
 
 ## Play online
 

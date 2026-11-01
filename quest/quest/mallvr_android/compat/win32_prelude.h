@@ -34,6 +34,11 @@
 #include <fstream>
 #include <iostream>
 #include <type_traits>
+#undef WIN32
+#undef _WIN32
+#undef __WIN32__
+#undef __WINDOWS__
+#include <SDL_platform.h> /* Freeze SDL's Android platform detection before _WIN32 enables MallVR's compatibility path. */
 #ifndef _WIN32
 #define _WIN32 1
 #endif

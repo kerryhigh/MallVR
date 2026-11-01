@@ -1,0 +1,236 @@
+apply plugin: 'com.android.application'
+
+def repoRoot = rootProject.file('../../..')
+def androidTree = new File(repoRoot, 'quest/android_tree')
+def dosboxSourceDir = project.findProperty('dosboxDir') ? file(project.property('dosboxDir')) : new File(repoRoot.parentFile, 'deps/DOSBox-X')
+def mallvrAndroid = new File(repoRoot, 'quest/quest/mallvr_android')
+def dosboxAndroid = new File(repoRoot, 'quest/quest/dosbox_android')
+def sdlDir = project.findProperty('sdlDir') ? file(project.property('sdlDir')) : null
+def sdlJavaSource = sdlDir == null ? null : new File(sdlDir, 'android-project/app/src/main/java')
+def gl4esDir = project.findProperty('gl4esDir') ? file(project.property('gl4esDir')) : null
+def gameFilesDir = project.findProperty('gameFiles') ? file(project.property('gameFiles')) : null
+def cardboardSdkDir = new File(rootProject.projectDir, 'third_party/cardboard/sdk')
+def generatedAssets = layout.buildDirectory.dir('generated/assets')
+def generatedDbx = layout.buildDirectory.dir('generated/mallvr-dbx')
+def generatedSdlJava = layout.buildDirectory.dir('generated/sdl-java')
+def unixPath = { File f -> f.absolutePath.replace('\\', '/') }
+def sha1File = { File f ->
+    def digest = java.security.MessageDigest.getInstance('SHA-1')
+    f.withInputStream { stream ->
+        byte[] buffer = new byte[1024 * 1024]
+        int count
+        while ((count = stream.read(buffer)) >= 0) digest.update(buffer, 0, count)
+    }
+    digest.digest().encodeHex().toString()
+}
+
+android {
+    namespace 'com.gainesphere.mallvr'
+    compileSdk 35
+    ndkVersion '29.0.14206865'
+
+    defaultConfig {
+        applicationId 'com.gainesphere.mallvr.cardboard'
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName '0.1-cardboard-pacman'
+        ndk { abiFilters 'arm64-v8a' }
+        externalNativeBuild {
+            ndkBuild {
+                arguments "DBX=${unixPath(generatedDbx.get().asFile)}"
+                arguments "SDL=${sdlDir == null ? '' : unixPath(sdlDir)}"
+                arguments "GL4ES=${gl4esDir == null ? '' : unixPath(gl4esDir)}"
+                arguments "CARDBOARD_SDK_DIR=${unixPath(cardboardSdkDir)}"
+                arguments "NDK_APPLICATION_MK=${unixPath(new File(mallvrAndroid, 'jni/Application.mk'))}"
+                arguments 'APP_ABI=arm64-v8a'
+                arguments 'APP_PLATFORM=android-29'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        ndkBuild { path new File(mallvrAndroid, 'jni/Android.mk') }
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile 'src/main/AndroidManifest.xml'
+            java.srcDirs = [
+                'src/main/java',
+                new File(repoRoot, 'quest/quest/mallvr_apk/java'),
+                sdlDir == null ? 'src/main/empty-sdl' : generatedSdlJava.get().asFile
+            ]
+            res.srcDirs = [
+                'src/main/res',
+                new File(repoRoot, 'quest/quest/mallvr_apk/res')
+            ]
+            assets.srcDirs = [generatedAssets]
+        }
+    }
+
+    packagingOptions {
+        jniLibs { useLegacyPackaging = true }
+    }
+    androidResources { noCompress += ['bin', 'exe'] }
+}
+
+tasks.register('prepareCardboardSdlJava') {
+    if (sdlJavaSource != null) {
+        inputs.dir(sdlJavaSource)
+        outputs.dir(generatedSdlJava)
+        doLast {
+            if (!sdlJavaSource.isDirectory())
+                throw new GradleException("SDL Android Java sources not found at ${sdlJavaSource}.")
+            File javaTree = generatedSdlJava.get().asFile
+            project.delete(javaTree)
+            project.copy { from sdlJavaSource; into javaTree }
+
+            File hidManager = new File(javaTree, 'org/libsdl/app/HIDDeviceManager.java')
+            if (!hidManager.isFile())
+                throw new GradleException("SDL HIDDeviceManager.java not found in ${javaTree}.")
+            String source = hidManager.getText('UTF-8')
+            String anchor = '        mContext.registerReceiver(mUsbBroadcast, filter);'
+            if (source.count(anchor) != 1)
+                throw new GradleException('Unexpected SDL HIDDeviceManager receiver-registration anchor.')
+            String replacement = '''        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            mContext.registerReceiver(mUsbBroadcast, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            mContext.registerReceiver(mUsbBroadcast, filter);
+        }'''
+            hidManager.setText(source.replace(anchor, replacement), 'UTF-8')
+        }
+    }
+}
+
+tasks.register('prepareCardboardAssets') {
+    inputs.dir(repoRoot.toPath().resolve('quest/package/engine'))
+    inputs.file(new File(rootProject.projectDir, 'make_pacman_games_json.js'))
+    if (gameFilesDir != null) {
+        def pacFiles = fileTree(gameFilesDir) { include '**/PAC/**' }
+        def discFiles = fileTree(gameFilesDir) { include '**/PACMAN.CUE', '**/PACMAN.BIN' }
+        inputs.files(pacFiles, discFiles)
+        def pacExe = pacFiles.files.find { it.name.equalsIgnoreCase('PAC.EXE') }
+        if (pacExe != null) {
+            def dumpRoot = pacExe.parentFile.parentFile
+            inputs.files(fileTree(dumpRoot) {
+                include 'DOS/**', 'BOOTDISK/**', 'UTILS/**', 'VPCSYS/**', 'VPCTEMP/**', 'CD/**'
+                include 'AUTOEXEC.BAT', 'COMMAND.COM', 'CONFIG.SYS', 'CONFIG.VPC', 'IO.SYS', 'INSTALL.BAT',
+                    'KEYWORD.VPC', 'MSDOS.SYS', 'VPCEXEC.BAT', 'WINA20.386'
+            })
+        }
+    }
+    outputs.dir(generatedAssets)
+    doLast {
+        if (gameFilesDir == null || !gameFilesDir.isDirectory())
+            throw new GradleException('Pass -PgameFiles=<MallVR games folder> so the Pac-Man data is included in this local APK.')
+        File assets = generatedAssets.get().asFile
+        project.delete(assets)
+        File engine = new File(assets, 'engine')
+        File hooks = new File(engine, 'hooks')
+        File licenses = new File(engine, 'licenses')
+        File bundledGames = new File(assets, 'gamefiles')
+        [hooks, licenses, bundledGames].each { it.mkdirs() }
+
+        project.exec {
+            commandLine 'node', new File(rootProject.projectDir, 'make_pacman_games_json.js').absolutePath,
+                new File(assets, 'games.json').absolutePath
+        }
+
+        def pacExes = fileTree(gameFilesDir) { include '**/PAC.EXE' }.files.findAll { it.parentFile.name.equalsIgnoreCase('PAC') }
+        if (pacExes.size() != 1) throw new GradleException("Expected one PAC/PAC.EXE under ${gameFilesDir}; found ${pacExes.size()}.")
+        File pacExe = pacExes.first()
+        String exeSha1 = sha1File(pacExe)
+        if (exeSha1 != '8122b1e2c672363f6b0798d8af0a4b57e715199b')
+            throw new GradleException("The PAC.EXE hash does not match the Pac-Man build supported by MallVR: ${exeSha1}")
+        def cues = fileTree(gameFilesDir) { include '**/PACMAN.CUE' }.files.findAll { new File(it.parentFile, 'PACMAN.BIN').isFile() }
+        if (cues.size() != 1) throw new GradleException("Expected one PACMAN.CUE + PACMAN.BIN pair under ${gameFilesDir}; found ${cues.size()}.")
+        File cue = cues.first()
+        File bin = new File(cue.parentFile, 'PACMAN.BIN')
+        String binSha1 = sha1File(bin)
+        if (binSha1 != 'f3be2645f89b8e06441d46346402d2625b78906d')
+            throw new GradleException("The PACMAN.BIN hash does not match the Pac-Man CD supported by MallVR: ${binSha1}")
+
+        File dumpRoot = pacExe.parentFile.parentFile
+        File bundledDrive = new File(bundledGames, dumpRoot.name)
+        // Pac-Man runs from the SU2000 C: dump. Include its game directory and
+        // shared DOS/VPC support, while leaving the other arcade games out.
+        project.copy {
+            from dumpRoot
+            into bundledDrive
+            include 'PAC/**', 'DOS/**', 'BOOTDISK/**', 'UTILS/**', 'VPCSYS/**', 'VPCTEMP/**', 'CD/**'
+            include 'AUTOEXEC.BAT', 'COMMAND.COM', 'CONFIG.SYS', 'CONFIG.VPC', 'IO.SYS', 'INSTALL.BAT',
+                'KEYWORD.VPC', 'MSDOS.SYS', 'VPCEXEC.BAT', 'WINA20.386'
+        }
+        project.copy { from cue; from bin; into bundledGames }
+        project.copy { from new File(repoRoot, 'quest/hooks/PAC.hooks'); into hooks }
+        project.copy { from new File(repoRoot, 'quest/android_tree/COPYING'); into licenses; rename { 'DOSBox-X_and_MallVR_GPL-2.0.txt' } }
+        project.copy { from new File(sdlDir, 'LICENSE.txt'); into licenses; rename { 'SDL2_zlib.txt' } }
+        project.copy { from new File(gl4esDir, 'LICENSE'); into licenses; rename { 'gl4es_MIT.txt' } }
+        project.copy { from new File(repoRoot, 'quest/quest/mallvr_apk/licenses/OpenVR_header_BSD-3.txt'); into licenses }
+        project.copy { from rootProject.file('third_party/cardboard/LICENSE'); into licenses; rename { 'Google_Cardboard_Apache-2.0.txt' } }
+    }
+}
+
+tasks.register('prepareCardboardNativeTree') {
+    inputs.dir(dosboxSourceDir)
+    inputs.dir(androidTree)
+    inputs.dir(new File(repoRoot, 'quest/dosbox_src'))
+    inputs.dir(new File(repoRoot, 'quest/quest/mallvr_android/compat'))
+    inputs.file(new File(repoRoot, 'quest/quest/apply_cardboard_hooks.js'))
+    outputs.dir(generatedDbx)
+    doLast {
+        if (!dosboxSourceDir.isDirectory())
+            throw new GradleException("DOSBox-X source tree not found at ${dosboxSourceDir}; pass -PdosboxDir=<DOSBox-X source folder>.")
+        File tree = generatedDbx.get().asFile
+        project.delete(tree)
+        project.copy {
+            from dosboxSourceDir
+            into tree
+            include 'src/**', 'include/**', 'vs/**', 'COPYING'
+        }
+        project.copy {
+            from new File(dosboxSourceDir, 'vs/config_package.h')
+            into tree
+        }
+        project.copy { from androidTree; into tree }
+        File hw = new File(tree, 'src/hardware')
+        project.copy {
+            from new File(repoRoot, 'quest/quest/mallvr_android/compat')
+            into new File(tree, 'compat')
+        }
+        project.copy {
+            from new File(repoRoot, 'quest/quest/mallvr_android/compat')
+            include 'vpix_android.cpp', 'vpix_cardboard.cpp'
+            into hw
+        }
+        project.copy {
+            from new File(repoRoot, 'quest/quest/dosbox_android/android_stubs.cpp')
+            into hw
+        }
+        project.copy { from new File(repoRoot, 'quest/dosbox_src/vpix_render.cpp'); into hw }
+        project.copy { from new File(repoRoot, 'quest/dosbox_src/vpix_render.h'); into hw }
+        project.copy { from new File(repoRoot, 'quest/dosbox_src/vpix_cardboard.h'); into hw }
+        project.copy { from new File(repoRoot, 'quest/dosbox_src/vpix_cardboard_xr.h'); into hw }
+        project.exec {
+            commandLine 'node', new File(repoRoot, 'quest/quest/apply_cardboard_hooks.js').absolutePath,
+                new File(repoRoot, 'quest/dosbox_src/vpix_render.cpp').absolutePath,
+                new File(hw, 'vpix_render.cpp').absolutePath
+        }
+    }
+}
+
+tasks.named('preBuild').configure {
+    dependsOn('prepareCardboardAssets', 'prepareCardboardNativeTree', 'prepareCardboardSdlJava')
+}
+tasks.configureEach { task ->
+    if (task.name.toLowerCase().startsWith('externalnativebuild'))
+        task.dependsOn('prepareCardboardNativeTree')
+}
+
+dependencies {
+    implementation project(':cardboard-sdk')
+    implementation 'org.apache.commons:commons-compress:1.25.0'
+    implementation 'org.tukaani:xz:1.9'
+}
+

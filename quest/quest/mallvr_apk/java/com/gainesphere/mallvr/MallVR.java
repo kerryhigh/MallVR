@@ -18,6 +18,7 @@ import java.util.*;
    - plan(): play.ps1 for the headset: the DOSBox-X conf + the env for one game, solo or as pod <n> of an online group (crossplay:
      the env play.ps1 -Pod n -Peers 127.0.0.1:<27110 + n> gives a PC pod, the same per-pod game settings files in an overlay). */
 public class MallVR {
+    public static String PLATFORM = "quest";
     public static final File ROOT = new File("/sdcard/MallVR");
     public static final File GAMES = new File(ROOT, "games"), ENGINE = new File(ROOT, "engine"), LOGS = new File(ROOT, "logs"), SETTINGS = new File(ROOT, "settings");
 
@@ -194,7 +195,7 @@ public class MallVR {
         if (g.cdAudioDir != null) p.env.put("VPIX_CD_DIR", g.cdAudioDir.getPath());
         p.env.put("VPIX_XR", "1");
         p.env.put("MALLVR_DIR", ROOT.getPath());
-        p.env.put("MALLVR_PLATFORM", "quest");
+        p.env.put("MALLVR_PLATFORM", PLATFORM);
         p.env.put("HOME", c.getFilesDir().getAbsolutePath());
 
         String extra = "";    // settings/quest_extra.conf: tester switches (e.g. [cpu] core=dynamic) without a new APK
@@ -268,6 +269,7 @@ public class MallVR {
             for (File d : new File[] { GAMES, ENGINE, LOGS, SETTINGS, new File(ENGINE, "emptycd"), new File(ROOT, "music/buggy") }) d.mkdirs();
             if (mark.isFile() && readAll(new FileInputStream(mark)).trim().equals(stamp)) return;
             copyAssets(c.getAssets(), "engine", ENGINE);
+            copyBundledGames(c.getAssets(), "gamefiles", GAMES);
             write(new File(ENGINE, "emptycd/README.txt"), "Empty on purpose: mounted as the CD-ROM drive for games without a disc image.\n");
             write(new File(GAMES, "PUT_GAMES_HERE.txt"), "Your Virtuality game files go in this folder, the same as the PC version's games folder:\n"
                 + "  VR 2000 Series Disc Image (Simon's)\\DAC\\DAC.EXE ... (SU2000 HDD dump)\n  PACMAN.CUE + PACMAN.BIN (Pac-Man VR's CD image)\n"
@@ -285,6 +287,20 @@ public class MallVR {
         }
         to.mkdirs();
         for (String n : l) copyAssets(am, path + "/" + n, new File(to, n));
+    }
+
+    /* The Cardboard build can include the user's Pac-Man dump as APK assets.
+       Merge it only into missing files so an existing local copy stays theirs. */
+    static void copyBundledGames(AssetManager am, String path, File to) throws IOException {
+        String[] l = am.list(path);
+        if (l == null || l.length == 0) {
+            if (to.isFile() && to.length() > 0) return;
+            to.getParentFile().mkdirs();
+            InputStream in = am.open(path); OutputStream o = new FileOutputStream(to); copy(in, o); in.close(); o.close();
+            return;
+        }
+        to.mkdirs();
+        for (String n : l) copyBundledGames(am, path + "/" + n, new File(to, n));
     }
 
     /* this app's recent crash lines in logcat (an app may read its own): native "Fatal signal" + backtrace, Java FATAL EXCEPTION */
